@@ -949,7 +949,7 @@ tools/
 ├── graph_query_tool.py             # 图谱查询工具
 ├── yolo_tool.py                   # YOLO 目标检测
 ├── sam_tool.py                    # SAM 图像分割
-└── document_parser_tool.py         # 文档解析工具
+└── document_tool.py               # 文档解析工具
 ```
 
 ## 注意事项
