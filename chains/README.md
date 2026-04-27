@@ -957,6 +957,37 @@ chains/
 └── pipeline.py                 # 完整流程链
 ```
 
+## 意图识别
+
+OrchestratorChain 使用 `agents/intention/recognizer.py` 进行意图识别，而非在链内部实现。
+
+**意图识别与调度流程**：
+```
+用户消息 → IntentionRecognizer.recognize() → IntentionType → RunnableBranch 路由
+```
+
+**意图类型与链的对应关系**：
+| 意图类型 | 执行链 | 说明 |
+|---------|--------|------|
+| `retrieval` | retrieval_chain | 知识检索 |
+| `diagnosis` | diagnosis_chain | 故障诊断 |
+| `guidance` | guidance_chain | 作业指引 |
+| `full` | pipeline_chain | 完整流程 |
+| `chat` | LLM直接回复 | 一般对话 |
+
+**LCEL实现**：
+```python
+from langchain.schema.runnable import RunnableBranch
+
+# 意图路由
+route_branch = RunnableBranch(
+    (lambda x: x["intention"] == "retrieval", retrieval_chain.retrieve),
+    (lambda x: x["intention"] == "diagnosis", diagnosis_chain.diagnose),
+    (lambda x: x["intention"] == "guidance", guidance_chain.generate_guidance),
+    llm_direct_reply  # 默认
+)
+```
+
 ## 注意事项
 
 1. **链的复用**: 使用单例模式避免重复创建链对象

@@ -463,6 +463,26 @@ api/
 └── main.py                     # API 入口
 ```
 
+## 意图识别
+
+API 层不直接处理意图识别，而是委托给 OrchestratorAgent 的 `intention_recognizer` 模块。
+
+**意图识别流程**：
+```
+请求进入 → OrchestratorAgent.run() → IntentionRecognizer.recognize() → 路由到子Agent
+```
+
+**识别类型**：
+| 类型 | 说明 | 路由目标 |
+|-----|------|---------|
+| `troubleshoot` | 故障诊断 | DiagnosisAgent |
+| `query_knowledge` | 知识检索 | RetrievalAgent |
+| `seek_guidance` | 作业指引 | GuidanceAgent |
+| `full_pipeline` | 完整流程 | All Agents |
+| `general_chat` | 一般对话 | LLM直接回复 |
+
+**技术方案**：采用 LLM 轻量级识别（qwen-turbo）+ 关键词兜底，详见 `agents/intention/` 模块。
+
 ## 注意事项
 
 1. **边界清晰**：Python 仅负责 AI 推理，不碰业务数据
