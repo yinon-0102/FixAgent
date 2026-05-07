@@ -10,6 +10,13 @@ class Settings:
     llm_top_p = float(os.getenv("LLM_TOP_P", "0.9"))
     llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", "2000"))
 
+    # Redis 配置
+    redis_host = os.getenv("REDIS_HOST", "localhost")
+    redis_port = int(os.getenv("REDIS_PORT", "6379"))
+    redis_password = os.getenv("REDIS_PASSWORD", None)
+    redis_db = int(os.getenv("REDIS_DB", "0"))
+    redis_ttl = int(os.getenv("REDIS_TTL", "86400"))  # 缓存默认24小时过期
+
 
 _settings = None
 

@@ -8,7 +8,15 @@
       "Bash(git config *)",
       "WebSearch",
       "WebFetch(domain:help.aliyun.com)",
-      "Bash(python -c \"from api.main import app; print\\([r.path for r in app.routes]\\)\")"
+      "Bash(python -c \"from api.main import app; print\\([r.path for r in app.routes]\\)\")",
+      "Bash(python -c \"from api.main import app; print\\([\\(r.path, r.methods\\) for r in app.routes if 'chat' in r.path]\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(git *)",
+      "Bash(python *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :6379)",
+      "Bash(tasklist)",
+      "Bash(findstr 22524)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 import json
 from schemas.request import ChatRequest, KnowledgeSearchRequest
@@ -14,6 +15,15 @@ app = FastAPI(
     title="FixAgent AI Module",
     version="1.0.0",
     description="AI推理引擎：故障诊断、知识检索、作业指引"
+)
+
+# CORS 中间件，允许跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
