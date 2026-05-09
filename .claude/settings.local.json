@@ -18,7 +18,9 @@
       "Bash(tasklist)",
       "Bash(findstr 22524)",
       "Bash(docker exec *)",
-      "Bash(rm *)"
+      "Bash(rm *)",
+      "Read(//usr/local/share/claude-code/**)",
+      "Read(//c/Program Files/Claude/**)"
     ]
   }
 }

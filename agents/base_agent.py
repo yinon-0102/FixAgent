@@ -1,0 +1,312 @@
+"""
+Agent基类模块
+
+定义所有Agent的基类和通用接口。
+采用模板方法模式，统一Agent执行流程。
+
+【与架构文档的对应关系】
+- 位置：agents/base_agent.py
+- 职责：AI核心组件的父类，定义统一执行流程
+- 被继承：RetrievalAgent、DiagnosisAgent、GuidanceAgent、OrchestratorAgent
+
+【设计模式】
+- 模板方法模式：run() 定义统一执行流程，子类实现具体逻辑
+- 单例模式：各子Agent由调用方管理生命周期，BaseAgent不负责实例化
+"""
+
+from abc import ABC, abstractmethod
+from typing import List, Dict, Any, Optional, AsyncIterator
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+from services.llm_service import LLMService
+
+
+class AgentInput(BaseModel):
+    """Agent输入模型"""
+    user_message: str = Field(description="用户消息")
+    session_id: str = Field(description="会话ID")
+    images: Optional[List[str]] = Field(default=None, description="图片列表")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="上下文信息")
+
+
+class AgentOutput(BaseModel):
+    """Agent输出模型"""
+    agent_name: str = Field(description="Agent名称")
+    message: str = Field(description="回复消息")
+    intention: Optional[str] = Field(default=None, description="识别的意图")
+    tools_used: List[str] = Field(default_factory=list, description="使用的工具")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    latency_ms: int = Field(description="执行时间")
+    raw_response: Optional[Dict[str, Any]] = Field(default=None, description="原始响应")
+
+
+class BaseAgent(ABC):
+    """
+    Agent基类
+
+    所有专业Agent继承此类，实现：
+    - name: Agent名称（抽象属性）
+    - description: Agent描述（抽象属性）
+    - get_system_prompt(): 返回角色定义提示词（抽象方法）
+    - _execute(): 执行具体逻辑（抽象方法，可选覆盖）
+
+    【执行流程（模板方法）】
+    1. 构建消息列表（_build_messages）
+    2. 调用LLM（_call_llm）
+    3. 处理输出（_process_response）
+    4. 返回结果（run）
+
+    【使用示例】
+    ```python
+    class MyAgent(BaseAgent):
+        @property
+        def name(self) -> str:
+            return "my_agent"
+
+        @property
+        def description(self) -> str:
+            return "我的Agent"
+
+        def get_system_prompt(self) -> str:
+            return "你是一个专业的..."
+
+        async def _execute(self, input_data: AgentInput) -> Dict[str, Any]:
+            # 具体执行逻辑
+            return {"message": "结果"}
+
+    agent = MyAgent(llm_service)
+    result = await agent.run(input_data)
+    ```
+    """
+
+    def __init__(self, llm_service: LLMService):
+        """
+        初始化BaseAgent
+
+        Args:
+            llm_service: LLM服务实例，用于调用大模型
+        """
+        self.llm_service = llm_service
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Agent名称"""
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Agent描述"""
+        pass
+
+    @abstractmethod
+    def get_system_prompt(self) -> str:
+        """
+        获取系统提示词
+
+        应包含：
+        - Agent角色定义
+        - 能力范围
+        - 输出格式要求
+
+        Returns:
+            系统提示词字符串
+        """
+        pass
+
+    def get_tools(self) -> List[Any]:
+        """
+        获取可用工具列表
+
+        默认返回空列表，子类可覆盖以提供具体工具。
+
+        Returns:
+            工具列表
+        """
+        return []
+
+    def _build_messages(self, input_data: AgentInput) -> List[Dict[str, str]]:
+        """
+        构建LLM消息列表
+
+        Args:
+            input_data: Agent输入数据
+
+        Returns:
+            消息列表，格式：[{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
+        """
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()}
+        ]
+
+        # 构建用户消息内容（包含用户输入、上下文、图片）
+        user_content = input_data.user_message
+
+        # 添加上下文信息（如有）
+        if input_data.context:
+            context_str = "\n\n## 上下文信息\n"
+            for k, v in input_data.context.items():
+                context_str += f"- {k}: {v}\n"
+            user_content += context_str
+
+        # 添加图片信息（如有）
+        if input_data.images:
+            images_str = "\n\n## 用户上传的图片\n"
+            for i, img in enumerate(input_data.images):
+                images_str += f"- 图片{i+1}: {img}\n"
+            user_content += images_str
+
+        # 添加用户消息
+        messages.append({"role": "user", "content": user_content})
+
+        return messages
+
+    async def _call_llm(
+        self,
+        messages: List[Dict[str, str]],
+        stream: bool = False
+    ) -> Dict[str, Any] | AsyncIterator[str]:
+        """
+        调用LLM服务
+
+        Args:
+            messages: 消息列表
+            stream: 是否流式输出
+
+        Returns:
+            非流式：完整响应字典
+            流式：异步生成器yield每个token
+        """
+        return await self.llm_service.chat(messages, stream=stream)
+
+    def _process_response(
+        self,
+        raw_response: Dict[str, Any],
+        tools_used: List[str],
+        metadata: Dict[str, Any],
+        intention: Optional[str] = None
+    ) -> AgentOutput:
+        """
+        处理LLM原始响应，转换为AgentOutput
+
+        Args:
+            raw_response: LLM返回的原始响应
+            tools_used: 使用的工具列表
+            metadata: 附加元数据
+            intention: 识别的用户意图
+
+        Returns:
+            AgentOutput对象
+        """
+        return AgentOutput(
+            agent_name=self.name,
+            message=raw_response.get("content", ""),
+            intention=intention,
+            tools_used=tools_used,
+            metadata=metadata,
+            raw_response=raw_response,
+            latency_ms=0
+        )
+
+    async def run(self, input_data: AgentInput) -> AgentOutput:
+        """
+        Agent执行入口（模板方法）
+
+        执行流程：
+        1. 构建消息
+        2. 调用LLM
+        3. 处理输出
+        4. 返回结果
+
+        Args:
+            input_data: Agent输入数据
+
+        Returns:
+            AgentOutput对象
+        """
+        import time
+        start_time = time.time()
+
+        # 1. 构建消息
+        messages = self._build_messages(input_data)
+
+        # 2. 调用LLM
+        response = await self._call_llm(messages, stream=False)
+
+        # 3. 计算耗时
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # 4. 处理输出
+        # 从 context 中提取意图（由外部 Orchestrator 识别后填入）
+        intention = input_data.context.get("intention") if input_data.context else None
+        output = self._process_response(
+            raw_response=response,
+            tools_used=self.get_tools_used(input_data),
+            metadata={"latency_ms": latency_ms},
+            intention=intention
+        )
+        output.latency_ms = latency_ms
+
+        return output
+
+    async def run_stream(self, input_data: AgentInput) -> AsyncIterator[str]:
+        """
+        Agent流式执行入口
+
+        Args:
+            input_data: Agent输入数据
+
+        Yields:
+            每个token
+        """
+        messages = self._build_messages(input_data)
+        stream_iter = await self._call_llm(messages, stream=True)
+
+        async for token in stream_iter:
+            yield token
+
+    def get_tools_used(self, input_data: AgentInput) -> List[str]:
+        """
+        获取本次执行使用的工具列表
+
+        默认返回空列表，子类可覆盖以记录实际使用的工具。
+
+        Args:
+            input_data: Agent输入数据
+
+        Returns:
+            工具名称列表
+        """
+        return []
+
+    async def run_with_context(
+        self,
+        user_message: str,
+        session_id: str,
+        images: Optional[List[str]] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> AgentOutput:
+        """
+        便捷执行方法
+
+        创建一个AgentInput并执行。
+
+        Args:
+            user_message: 用户消息
+            session_id: 会话ID
+            images: 图片列表（可选）
+            context: 上下文信息（可选）
+
+        Returns:
+            AgentOutput对象
+        """
+        input_data = AgentInput(
+            user_message=user_message,
+            session_id=session_id,
+            images=images,
+            context=context
+        )
+        return await self.run(input_data)
