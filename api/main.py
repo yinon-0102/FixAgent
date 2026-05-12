@@ -161,23 +161,28 @@ async def knowledge_search(request: KnowledgeSearchRequest) -> KnowledgeSearchRe
 @app.post("/ai/memory/consolidate", response_model=MemoryConsolidateResponse)
 async def memory_consolidate(request: MemoryConsolidateRequest) -> MemoryConsolidateResponse:
     """
-    将多条原始对话压缩为结构化记忆摘要。
+    将多条原始对话压缩为结构化记忆摘要（滑动窗口 + 分类记忆）。
 
     Java 端在会话对话数达到阈值（如30条）时调用此接口：
-    1. 从数据库取出该会话的全部对话
-    2. 打包为 MemoryConsolidateRequest
-    3. 调用本接口生成摘要
-    4. 将摘要存回数据库，清空原始对话
+    1. 从数据库取出已有的偏好摘要和未完成事项
+    2. 取出最近30条未压缩的原始对话
+    3. 打包为 MemoryConsolidateRequest
+    4. 调用本接口 —— LLM 提取事实并自动检索向量库做冲突检测
+    5. Java 端存储：new_facts → 事实库（向量表），偏好/未完成 → 摘要表，
+       superseded_ids → 标记旧事实为无效
     """
     from datetime import datetime
 
     try:
-        # 组装 AgentInput（对话列表放在 context 中）
         conv_dicts = [{"seq": c.seq, "role": c.role, "content": c.content} for c in request.conversations]
         agent_input = AgentInput(
             user_message="请整理以下对话记录",
             session_id=request.session_id,
-            context={"conversations": conv_dicts}
+            context={
+                "conversations": conv_dicts,
+                "old_preferences": request.old_preferences,
+                "old_unresolved": request.old_unresolved
+            }
         )
 
         result = await _get_memory_agent().run(agent_input)

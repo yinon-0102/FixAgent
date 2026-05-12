@@ -696,6 +696,25 @@ class TaskStatusResponse(BaseResponse):
 
 # ==================== 记忆整理相关 ====================
 
+class FactSummary(BaseModel):
+    """事实摘要子模型"""
+    content: str = Field(description="事实描述")
+    keywords: str = Field(default="", description="检索用关键词")
+    source_seq_range: str = Field(default="", description="来源对话序号范围")
+
+
+class PreferenceSummary(BaseModel):
+    """偏好摘要子模型"""
+    content: str = Field(description="偏好描述")
+    category: str = Field(default="其他", description="分类: 交互风格|格式要求|工作习惯|关注领域|其他")
+
+
+class UnresolvedSummary(BaseModel):
+    """未完成事项子模型"""
+    content: str = Field(description="待解决描述")
+    type: str = Field(default="待办", description="类型: 未答复问题|进行中任务|用户待办")
+
+
 class MemorySummary(BaseModel):
     """
     记忆摘要模型
@@ -704,16 +723,18 @@ class MemorySummary(BaseModel):
     【何时用】LLM 完成对话整理后，作为结构化摘要返回给 Java
 
     【字段说明】
-    - core_question: 用户最关心的核心问题
-    - key_conclusions: 对话中给出的关键诊断结论/建议
-    - user_preferences: 用户表达的特殊偏好或约束
-    - unresolved: 用户问了但未解决的问题
+    - new_facts: 新增/更新的事实（客观、已确认的信息）
+    - superseded_ids: 本次整理覆盖掉的旧事实ID
+    - updated_preferences: 合并后的用户偏好
+    - updated_unresolved: 仍悬而未决的事项
+    - resolved_items: 本次解决的事项（从未完成列表中移除）
     - brief_summary: 200字以内的整体摘要
     """
-    core_question: str = Field(default="", description="用户的核心问题")
-    key_conclusions: List[str] = Field(default_factory=list, description="关键结论列表")
-    user_preferences: List[str] = Field(default_factory=list, description="用户偏好/约束")
-    unresolved: List[str] = Field(default_factory=list, description="未解决的问题")
+    new_facts: List[FactSummary] = Field(default_factory=list, description="新增事实列表")
+    superseded_ids: List[str] = Field(default_factory=list, description="被覆盖的旧事实ID")
+    updated_preferences: List[PreferenceSummary] = Field(default_factory=list, description="更新后的偏好列表")
+    updated_unresolved: List[UnresolvedSummary] = Field(default_factory=list, description="更新后的未完成事项")
+    resolved_items: List[str] = Field(default_factory=list, description="已解决的事项描述")
     brief_summary: str = Field(default="", description="200字以内的整体摘要")
 
 

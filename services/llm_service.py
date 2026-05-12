@@ -1,6 +1,6 @@
 import json
 import httpx
-from typing import AsyncIterator, Optional, List, Dict, Any
+from typing import AsyncIterator, Optional, List, Dict, Any, Callable, Awaitable
 from config.settings import get_settings
 
 
@@ -12,6 +12,7 @@ class LLMService:
     - 同步/异步对话
     - 流式输出
     - 多轮对话上下文
+    - Function calling（工具调用）
     """
 
     def __init__(self):
@@ -113,6 +114,111 @@ class LLMService:
                                     yield token
                         except json.JSONDecodeError:
                             continue
+
+    async def _sync_chat_with_tools(
+        self,
+        client: httpx.AsyncClient,
+        headers: Dict,
+        params: Dict
+    ) -> Dict[str, Any]:
+        """带工具调用的同步对话（内部方法）"""
+        response = await client.post(
+            f"{self.api_base}/chat/completions",
+            headers=headers,
+            json=params
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        if "choices" in result and result["choices"]:
+            choice = result["choices"][0]
+            message = choice.get("message", {})
+            return {
+                "content": message.get("content", ""),
+                "tool_calls": message.get("tool_calls", []),
+                "finish_reason": choice.get("finish_reason", "stop"),
+                "usage": result.get("usage", {}),
+                "request_id": result.get("id")
+            }
+        return {"content": "", "tool_calls": [], "finish_reason": "error"}
+
+    async def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_handlers: Dict[str, Callable[..., Awaitable]],
+        max_iterations: int = 10
+    ) -> Dict[str, Any]:
+        """
+        带工具调用的对话
+
+        自动处理 LLM 的工具调用循环：
+        1. 发送 messages + tools 给 LLM
+        2. LLM 返回 tool_calls → 执行对应工具 → 结果追加到 messages
+        3. 回到步骤2，直到 LLM 返回最终文本响应
+
+        Args:
+            messages: 对话消息列表
+            tools: OpenAI 格式的工具定义列表
+            tool_handlers: {"工具名": async_handler} 映射
+            max_iterations: 最大工具调用轮数
+
+        Returns:
+            最终响应字典，包含 content / usage / request_id
+        """
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": self.settings.llm_temperature,
+            "top_p": self.settings.llm_top_p,
+            "max_tokens": self.settings.llm_max_tokens
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        for _ in range(max_iterations):
+            response = await self._sync_chat_with_tools(self.client, headers, params)
+
+            tool_calls = response.get("tool_calls", [])
+            if not tool_calls:
+                return response
+
+            # 添加 assistant 消息（含 tool_calls）
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls
+            })
+
+            # 执行每个工具调用
+            for tc in tool_calls:
+                func_name = tc["function"]["name"]
+                try:
+                    func_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    func_args = {}
+
+                if func_name in tool_handlers:
+                    try:
+                        result = await tool_handlers[func_name](**func_args)
+                    except Exception as e:
+                        result = {"error": str(e)}
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(result, ensure_ascii=False)
+                    })
+
+            params["messages"] = messages
+
+        raise RuntimeError(f"Tool calling 超出最大迭代次数 ({max_iterations})")
+
 
 # 单例模式
 _llm_service: Optional[LLMService] = None

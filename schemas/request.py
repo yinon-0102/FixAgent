@@ -38,7 +38,7 @@ ChatRequest request = ChatRequest.builder()
 5. 自定义校验（@validator）
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field, validator
 from schemas.models import AgentMode, CaseStatus
 
@@ -761,3 +761,5 @@ class MemoryConsolidateRequest(BaseModel):
     """
     session_id: str = Field(..., description="会话ID")
     conversations: List[ConversationItem] = Field(..., min_length=1, description="待整理的对话列表")
+    old_preferences: List[Dict[str, str]] = Field(default_factory=list, description="已有的偏好列表（用于冲突合并）")
+    old_unresolved: List[Dict[str, str]] = Field(default_factory=list, description="已有的未完成事项列表（用于判断是否解决）")

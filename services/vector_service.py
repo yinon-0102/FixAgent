@@ -35,11 +35,12 @@ class VectorService:
         self._ensure_index()
 
     def _ensure_index(self):
-        """确保向量索引存在"""
+        """确保向量索引存在（含分类/标签过滤所需的 TAG 字段）"""
         try:
             self.redis.execute_command("FT.INFO", self.INDEX_NAME)
+            # 索引已存在，尝试补充 TAG 字段（RediSearch 2.0+ 支持 FT.ALTER）
+            self._migrate_index()
         except redis.exceptions.ResponseError:
-            # 索引不存在，创建它（Redis Stack 2.x / RediSearch 2.x 语法，需要参数数量）
             self.redis.execute_command(
                 "FT.CREATE",
                 self.INDEX_NAME,
@@ -48,8 +49,20 @@ class VectorService:
                 "text", "TEXT",
                 "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.VECTOR_DIM), "DISTANCE_METRIC", "COSINE",
                 "metadata", "TEXT",
+                "category", "TAG",
+                "tags", "TAG",
                 "created_at", "NUMERIC"
             )
+
+    def _migrate_index(self):
+        """为已有索引追加 category/tags TAG 字段（字段已存在时静默跳过）"""
+        for field_name in ("category", "tags"):
+            try:
+                self.redis.execute_command(
+                    "FT.ALTER", self.INDEX_NAME, "SCHEMA", "ADD", field_name, "TAG"
+                )
+            except redis.exceptions.ResponseError:
+                pass
 
     def _to_bytes(self, vector: List[float]) -> bytes:
         """将向量列表转为字节数组"""
@@ -60,7 +73,9 @@ class VectorService:
         doc_id: str,
         text: str,
         vector: List[float],
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        category: str = None,
+        tags: List[str] = None
     ) -> bool:
         """
         添加向量到数据库
@@ -70,6 +85,8 @@ class VectorService:
             text: 原始文本内容
             vector: 1024维向量列表
             metadata: 其他元数据（可选）
+            category: 分类标签（可选，如 "motor"），用于过滤检索
+            tags: 标签列表（可选，如 ["bearing", "overheat"]），用于过滤检索
 
         Returns:
             是否添加成功
@@ -78,14 +95,19 @@ class VectorService:
             key = f"doc:{doc_id}"
             metadata_json = json.dumps(metadata) if metadata else "{}"
 
-            # 存储文档数据并自动索引
-            self.redis.hset(key, mapping={
+            mapping = {
                 "id": doc_id,
                 "text": text,
                 "vector": self._to_bytes(vector),
                 "metadata": metadata_json,
                 "created_at": str(int(time.time()))
-            })
+            }
+            if category:
+                mapping["category"] = category
+            if tags:
+                mapping["tags"] = ",".join(tags) if isinstance(tags, list) else tags
+
+            self.redis.hset(key, mapping=mapping)
             return True
         except Exception as e:
             print(f"[ERROR] add_vector failed: {e}")
@@ -114,7 +136,9 @@ class VectorService:
                 doc["doc_id"],
                 doc["text"],
                 doc["vector"],
-                doc.get("metadata")
+                doc.get("metadata"),
+                doc.get("category"),
+                doc.get("tags")
             ):
                 success_count += 1
         return success_count
@@ -123,7 +147,8 @@ class VectorService:
         self,
         vector: List[float],
         top_k: int = 5,
-        include_metadata: bool = True
+        include_metadata: bool = True,
+        filter: str = None
     ) -> List[Dict[str, Any]]:
         """
         向量相似度搜索
@@ -131,25 +156,34 @@ class VectorService:
         Args:
             vector: 查询向量（1024维）
             top_k: 返回前K个最相似结果
-            include_metadata: 是否包含元数据
+            include_metadata: 是否包含元数据和文本内容
+            filter: RediSearch 过滤表达式（可选）。
+                    例: "@category:{motor}" 按分类过滤
+                        "@tags:{bearing|overheat}" 按标签过滤
+                        "(@category:{motor} @tags:{bearing})" 组合过滤
 
         Returns:
             相似文档列表，每个元素包含:
                 - doc_id: 文档ID
-                - text: 文本内容
+                - text: 文本内容（include_metadata=True 时）
                 - score: 相似度分数
-                - metadata: 元数据
+                - metadata: 元数据字典（include_metadata=True 时）
         """
         try:
             query_vector = self._to_bytes(vector)
 
-            # 执行 KNN 搜索
+            # 构建搜索语句：filter 为空时用 *（全量），否则用 filter 限定范围
+            if filter:
+                query = f"({filter})=>[KNN {top_k} @vector $vector AS score]"
+            else:
+                query = f"*=>[KNN {top_k} @vector $vector AS score]"
+
             results = self.redis.execute_command(
                 "FT.SEARCH",
                 self.INDEX_NAME,
-                f"*=>[KNN {top_k} @vector $vector AS score]",
+                query,
                 "PARAMS", "2", "vector", query_vector,
-                "RETURN", "3", "id", "text", "score",
+                "RETURN", "4", "id", "text", "score", "metadata",
                 "SORTBY", "score",
                 "LIMIT", "0", str(top_k),
                 "DIALECT", "2"
@@ -158,22 +192,31 @@ class VectorService:
             # 解析结果
             docs = []
             if results and len(results) > 1:
-                # results[0] 是总数量，之后每两项为一组：[key, [fields...]]
                 for i in range(1, len(results), 2):
                     key = results[i]
                     fields = results[i + 1]
-                    # fields 是 [field, value, field, value, ...]
                     field_dict = {}
                     for j in range(0, len(fields), 2):
                         field_dict[fields[j]] = fields[j + 1]
 
+                    def _decode(field_name: bytes, default=""):
+                        val = field_dict.get(field_name)
+                        if val is None:
+                            return default
+                        return val.decode() if isinstance(val, bytes) else val
+
                     doc = {
-                        "doc_id": field_dict.get(b"id", b"").decode() if isinstance(field_dict.get(b"id"), bytes) else field_dict.get(b"id", ""),
+                        "doc_id": _decode(b"id"),
                         "score": float(field_dict.get(b"score", 0))
                     }
                     if include_metadata:
-                        text_val = field_dict.get(b"text", b"")
-                        doc["text"] = text_val.decode() if isinstance(text_val, bytes) else text_val
+                        doc["text"] = _decode(b"text")
+
+                        metadata_raw = _decode(b"metadata", "{}")
+                        try:
+                            doc["metadata"] = json.loads(metadata_raw)
+                        except (json.JSONDecodeError, TypeError):
+                            doc["metadata"] = {}
                     docs.append(doc)
 
             return docs
@@ -186,7 +229,8 @@ class VectorService:
         self,
         text: str,
         top_k: int = 5,
-        include_metadata: bool = True
+        include_metadata: bool = True,
+        filter: str = None
     ) -> List[Dict[str, Any]]:
         """
         直接用文本搜索（内部自动转向量）
@@ -195,6 +239,7 @@ class VectorService:
             text: 查询文本
             top_k: 返回前K个最相似结果
             include_metadata: 是否包含元数据
+            filter: RediSearch 过滤表达式（可选）
 
         Returns:
             相似文档列表
@@ -203,7 +248,7 @@ class VectorService:
 
         embedding = get_text_embedding()
         vector = await embedding.embed(text)
-        return self.search(vector, top_k, include_metadata)
+        return self.search(vector, top_k, include_metadata, filter)
 
     def delete(self, doc_id: str) -> bool:
         """
