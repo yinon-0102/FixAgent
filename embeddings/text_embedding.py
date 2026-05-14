@@ -5,10 +5,13 @@
 """
 
 import hashlib
+import logging
 import redis
 import httpx
 from typing import Optional, List, Dict, Any
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class TextEmbedding:
@@ -137,7 +140,7 @@ class TextEmbedding:
         # 打印embedding数量和维度（用于调试）
         if result.get("data"):
             dim = len(result["data"][0]["embedding"])
-            print(f"[DEBUG] Model: {self.model}, Dimension: {dim}")
+            logger.debug(f"Model: {self.model}, Dimension: {dim}")
 
         if "data" in result:
             embeddings = [item["embedding"] for item in sorted(result["data"], key=lambda x: x["index"])]

@@ -8,6 +8,7 @@
 """
 
 import json
+import logging
 import httpx
 from typing import Optional
 from config.settings import get_settings
@@ -15,6 +16,8 @@ from schemas.models import IntentionType, IntentionResult
 
 from .prompts import SYSTEM_PROMPT, USER_TEMPLATE
 from .fallback import fallback_recognize
+
+logger = logging.getLogger(__name__)
 
 
 class IntentionRecognizer:
@@ -56,7 +59,7 @@ class IntentionRecognizer:
             return await self._llm_recognize(message, model)
         except Exception as e:
             # LLM 失败时降级到关键词兜底
-            print(f"[WARNING] LLM识别失败，使用兜底方案: {e}")
+            logger.warning(f"LLM识别失败，使用兜底方案: {e}")
             return fallback_recognize(message)
 
     async def _llm_recognize(self, message: str, model: str) -> IntentionResult:

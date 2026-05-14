@@ -15,6 +15,7 @@ Agent基类模块
 """
 
 import time
+import asyncio
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, AsyncIterator
 from datetime import datetime
@@ -39,7 +40,7 @@ class AgentOutput(BaseModel):
     intention: Optional[str] = Field(default=None, description="识别的意图")
     tools_used: List[str] = Field(default_factory=list, description="使用的工具")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
-    latency_ms: int = Field(description="执行时间")
+    latency_ms: int = Field(default=0, description="执行时间")
     raw_response: Optional[Dict[str, Any]] = Field(default=None, description="原始响应")
 
 
@@ -208,8 +209,7 @@ class BaseAgent(ABC):
             intention=intention,
             tools_used=tools_used,
             metadata=metadata,
-            raw_response=raw_response,
-            latency_ms=0
+            raw_response=raw_response
         )
 
     async def run(self, input_data: AgentInput) -> AgentOutput:
@@ -370,6 +370,68 @@ class BaseAgent(ABC):
                 },
                 latency_ms=latency_ms
             )
+
+    async def run_with_react_stream(
+        self,
+        input_data: AgentInput,
+        max_iterations: int = 10
+    ) -> AsyncIterator[dict]:
+        """
+        ReAct 模式流式执行入口
+
+        先执行 ReAct 循环（工具调用阶段），完成后将最终回答和工具调用
+        追踪以结构化事件流的形式逐 token 输出。
+
+        与 run_with_react 的区别：
+        - run_with_react: 返回 AgentOutput，适合非流式 API
+        - run_with_react_stream: yield 事件 dict，适合 SSE 流式 API
+
+        事件格式：
+        - {"event": "status", "data": {"stage": "...", "mode": "..."}}
+        - {"event": "tool", "data": {"tool": "knowledge_retrieval"}}
+        - {"event": "token", "data": {"content": "..."}}
+        - {"event": "done", "data": {}}
+        - {"event": "error", "data": {"message": "..."}}
+        """
+        start_time = time.time()
+
+        yield {
+            "event": "status",
+            "data": {"stage": f"{self.description}，正在分析...", "mode": self.name}
+        }
+
+        try:
+            output = await self.run_with_react(input_data, max_iterations)
+
+            if output.metadata.get("status") == "error":
+                yield {"event": "error", "data": {"message": output.message}}
+                yield {"event": "done", "data": {}}
+                return
+
+            # 输出工具调用事件
+            react_trace = output.metadata.get("react_trace", [])
+            for step in react_trace:
+                if step.get("action") == "tool_call":
+                    for tc in step.get("tool_calls", []):
+                        yield {
+                            "event": "tool",
+                            "data": {"tool": tc.get("name", "unknown")}
+                        }
+
+            # 逐字流式输出最终回答
+            message = output.message
+            for i in range(0, len(message)):
+                yield {"event": "token", "data": {"content": message[i]}}
+                if i % 15 == 0:
+                    await asyncio.sleep(0)
+
+            # 附加耗时
+            latency = output.latency_ms or int((time.time() - start_time) * 1000)
+            yield {"event": "done", "data": {"latency_ms": latency}}
+
+        except Exception as e:
+            yield {"event": "error", "data": {"message": str(e)}}
+            yield {"event": "done", "data": {}}
 
     async def run_stream(self, input_data: AgentInput) -> AsyncIterator[str]:
         """

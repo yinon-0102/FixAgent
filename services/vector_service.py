@@ -5,11 +5,14 @@
 """
 
 import json
+import logging
 import struct
 import time
 import redis
 from typing import List, Dict, Any, Optional
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class VectorService:
@@ -110,7 +113,7 @@ class VectorService:
             self.redis.hset(key, mapping=mapping)
             return True
         except Exception as e:
-            print(f"[ERROR] add_vector failed: {e}")
+            logger.error(f"add_vector failed: {e}")
             return False
 
     def add_vector_batch(
@@ -222,7 +225,7 @@ class VectorService:
             return docs
 
         except Exception as e:
-            print(f"[ERROR] search failed: {e}")
+            logger.error(f"search failed: {e}")
             return []
 
     async def search_by_text(
@@ -264,7 +267,7 @@ class VectorService:
             self.redis.execute_command("FT.DEL", self.INDEX_NAME, doc_id)
             return True
         except Exception as e:
-            print(f"[ERROR] delete failed: {e}")
+            logger.error(f"delete failed: {e}")
             return False
 
     def count(self) -> int:

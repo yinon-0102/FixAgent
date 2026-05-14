@@ -6,7 +6,7 @@ OrchestratorAgent — 调度中枢
 
 【与架构文档的对应关系】
 - 位置：agents/orchestrator_agent.py
-- 依赖：agents/intention/（意图识别）、chains/orchestrator.py（路由映射）
+- 依赖：agents/intention/（意图识别）
 - 下游：RetrievalAgent / DiagnosisAgent / GuidanceAgent（子Agent）
 
 【执行流程】
@@ -22,9 +22,30 @@ from collections.abc import AsyncIterator
 
 from agents.base_agent import BaseAgent, AgentInput, AgentOutput
 from agents.intention.recognizer import get_intention_recognizer
-from chains.orchestrator import map_intention_to_mode
 from schemas.models import AgentMode, IntentionType, IntentionResult
 from services.llm_service import LLMService
+
+
+def _map_intention_to_mode(intention: IntentionType) -> AgentMode:
+    """
+    将用户意图映射为 Agent 执行模式
+
+    | 用户意图          | 执行模式    |
+    |------------------|------------|
+    | query_knowledge  | retrieval  |
+    | troubleshoot     | diagnosis  |
+    | seek_guidance    | guidance   |
+    | submit_case      | retrieval  |
+    | general_chat     | chat       |
+    """
+    mapping = {
+        IntentionType.QUERY_KNOWLEDGE: AgentMode.RETRIEVAL,
+        IntentionType.TROUBLESHOOT: AgentMode.DIAGNOSIS,
+        IntentionType.SEEK_GUIDANCE: AgentMode.GUIDANCE,
+        IntentionType.SUBMIT_CASE: AgentMode.RETRIEVAL,
+        IntentionType.GENERAL_CHAT: AgentMode.CHAT,
+    }
+    return mapping.get(intention, AgentMode.CHAT)
 
 
 class OrchestratorAgent(BaseAgent):
@@ -108,7 +129,7 @@ class OrchestratorAgent(BaseAgent):
                 intention_result = await self.recognizer.recognize(
                     input_data.user_message
                 )
-                effective_mode = map_intention_to_mode(intention_result.intention)
+                effective_mode = _map_intention_to_mode(intention_result.intention)
             else:
                 effective_mode = user_mode
 
@@ -157,7 +178,7 @@ class OrchestratorAgent(BaseAgent):
             intention_result = await self.recognizer.recognize(
                 input_data.user_message
             )
-            effective_mode = map_intention_to_mode(intention_result.intention)
+            effective_mode = _map_intention_to_mode(intention_result.intention)
         else:
             effective_mode = user_mode
 

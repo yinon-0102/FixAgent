@@ -1,14 +1,18 @@
 import json
 import logging
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 from schemas.request import ChatRequest, KnowledgeImportRequest, KnowledgeSearchRequest, MemoryConsolidateRequest
 from schemas.response import ChatResponse, KnowledgeImportResponse, KnowledgeSearchResponse, BaseResponse, MemoryConsolidateResponse
 from agents.orchestrator_agent import get_orchestrator_agent
+from agents.retrieval_agent import get_retrieval_agent
+from agents.diagnosis_agent import get_diagnosis_agent
+from agents.guidance_agent import get_guidance_agent
 from agents.memory_agent import get_memory_agent
 from agents.base_agent import AgentInput
+from services.vector_service import get_vector_service
 
 logger = logging.getLogger(__name__)
 
@@ -108,44 +112,94 @@ async def chat_stream(request: ChatRequest):
 """检索"""
 @app.post("/ai/retrieval", response_model=ChatResponse)
 async def retrieval(request: ChatRequest) -> ChatResponse:
-    #直接调用 RetrievalAgent，从向量库检索相关知识。
-
+    """直接调用 RetrievalAgent，从向量库检索相关知识。"""
     try:
-        pass
+        logger.info(f"[retrieval] session={request.session_id} msg_len={len(request.message)}")
+        result = await get_retrieval_agent().run_with_react(AgentInput(
+            user_message=request.message,
+            session_id=request.session_id,
+            images=request.images
+        ))
+        logger.info(f"[retrieval] session={request.session_id} done latency={result.latency_ms}ms")
+        return ChatResponse(
+            session_id=request.session_id,
+            message=result.message,
+            tools_used=result.tools_used if result.tools_used else None,
+            latency_ms=result.latency_ms
+        )
     except Exception as e:
+        logger.exception(f"[retrieval] session={request.session_id} error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 """诊断"""
 @app.post("/ai/diagnosis", response_model=ChatResponse)
 async def diagnosis(request: ChatRequest) -> ChatResponse:
-    #直接调用 DiagnosisAgent，进行故障分析和原因推理。
-
+    """直接调用 DiagnosisAgent，进行故障分析和原因推理。"""
     try:
-        pass
+        logger.info(f"[diagnosis] session={request.session_id} msg_len={len(request.message)}")
+        result = await get_diagnosis_agent().run_with_react(AgentInput(
+            user_message=request.message,
+            session_id=request.session_id,
+            images=request.images
+        ))
+        logger.info(f"[diagnosis] session={request.session_id} done latency={result.latency_ms}ms")
+        return ChatResponse(
+            session_id=request.session_id,
+            message=result.message,
+            intention=result.intention,
+            tools_used=result.tools_used if result.tools_used else None,
+            latency_ms=result.latency_ms
+        )
     except Exception as e:
+        logger.exception(f"[diagnosis] session={request.session_id} error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 """指引"""
 @app.post("/ai/guidance", response_model=ChatResponse)
 async def guidance(request: ChatRequest) -> ChatResponse:
-    #直接调用 GuidanceAgent，生成标准化的维修作业步骤。
-
+    """直接调用 GuidanceAgent，生成标准化的维修作业步骤。"""
     try:
-        pass
+        logger.info(f"[guidance] session={request.session_id} msg_len={len(request.message)}")
+        result = await get_guidance_agent().run_with_react(AgentInput(
+            user_message=request.message,
+            session_id=request.session_id,
+            images=request.images
+        ))
+        logger.info(f"[guidance] session={request.session_id} done latency={result.latency_ms}ms")
+        return ChatResponse(
+            session_id=request.session_id,
+            message=result.message,
+            tools_used=result.tools_used if result.tools_used else None,
+            latency_ms=result.latency_ms
+        )
     except Exception as e:
+        logger.exception(f"[guidance] session={request.session_id} error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 """完整流程"""
 @app.post("/ai/pipeline", response_model=ChatResponse)
 async def pipeline(request: ChatRequest) -> ChatResponse:
-    #依次执行：检索 -> 诊断 -> 指引，返回综合分析结果。
-
+    """依次执行：检索 -> 诊断 -> 指引，返回综合分析结果。"""
     try:
-        pass
+        logger.info(f"[pipeline] session={request.session_id} msg_len={len(request.message)}")
+        result = await _get_orchestrator().run_with_context(
+            user_message=request.message,
+            session_id=request.session_id,
+            images=request.images,
+            context={"mode": "full"}
+        )
+        logger.info(f"[pipeline] session={request.session_id} done latency={result.latency_ms}ms")
+        return ChatResponse(
+            session_id=request.session_id,
+            message=result.message,
+            tools_used=result.tools_used if result.tools_used else None,
+            latency_ms=result.latency_ms
+        )
     except Exception as e:
+        logger.exception(f"[pipeline] session={request.session_id} error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -198,11 +252,52 @@ async def knowledge_import(request: KnowledgeImportRequest) -> KnowledgeImportRe
 """知识检索"""
 @app.post("/ai/knowledge/search", response_model=KnowledgeSearchResponse)
 async def knowledge_search(request: KnowledgeSearchRequest) -> KnowledgeSearchResponse:
-    #直接调用向量检索服务，返回 TopK 相关片段。
+    """直接调用向量检索服务，返回 TopK 相关片段。"""
+    import time
 
     try:
-        pass
+        logger.info(f"[knowledge_search] q={request.query[:50]} top_k={request.top_k}")
+        svc = get_vector_service()
+
+        # 构建 RediSearch 过滤表达式
+        filter_parts = []
+        if request.category:
+            filter_parts.append(f"@category:{{{request.category}}}")
+        if request.tags:
+            tag_str = "|".join(request.tags)
+            filter_parts.append(f"@tags:{{{tag_str}}}")
+        filter_str = " ".join(f"({p})" for p in filter_parts) if filter_parts else None
+
+        t0 = time.time()
+        results = await svc.search_by_text(
+            text=request.query,
+            top_k=request.top_k,
+            filter=filter_str
+        )
+        query_time_ms = int((time.time() - t0) * 1000)
+
+        from schemas.models import VectorSearchResult
+        data = [
+            VectorSearchResult(
+                id=r["doc_id"],
+                score=r["score"],
+                content=r.get("text", ""),
+                metadata=r.get("metadata", {})
+            )
+            for r in results
+        ]
+
+        logger.info(f"[knowledge_search] found={len(data)} latency={query_time_ms}ms")
+        return KnowledgeSearchResponse(
+            success=True,
+            message=f"检索完成，找到 {len(data)} 条结果",
+            code=200,
+            data=data,
+            total=len(data),
+            query_time_ms=query_time_ms
+        )
     except Exception as e:
+        logger.exception(f"[knowledge_search] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -262,7 +357,6 @@ async def memory_consolidate(request: MemoryConsolidateRequest) -> MemoryConsoli
 """全局异常处理"""
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=500,
         content=BaseResponse(

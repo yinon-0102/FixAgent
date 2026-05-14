@@ -43,16 +43,18 @@ class DiagnosisAgent(BaseAgent):
             "1. 分析用户描述的故障现象\n"
             "2. 使用 knowledge_retrieval 工具检索相关维修知识和历史案例\n"
             "3. 使用 graph_query_diagnosis_path 工具从知识图谱查询诊断路径（设备→部件→故障→解决方案的因果链路）\n"
-            "4. 必要时追问用户更多细节（工况、部位、发生频率等）\n"
-            "5. 推理可能的故障原因，按概率排序\n"
-            "6. 给出专业诊断意见和下一步建议\n\n"
+            "4. 使用 graph_search_devices 工具搜索设备列表，在不确定设备全名时缩小范围\n"
+            "5. 必要时追问用户更多细节（工况、部位、发生频率等）\n"
+            "6. 推理可能的故障原因，按概率排序\n"
+            "7. 给出专业诊断意见和下一步建议\n\n"
             "## 工具使用策略\n"
+            "- **graph_search_devices**: 搜索设备列表，按名称/编码/型号/位置模糊匹配。不确定设备全名时先用此工具缩小范围\n"
+            "- **graph_query_diagnosis_path**: 查询知识图谱中的结构化因果链路。需要传设备名称关键字和故障现象关键词\n"
             "- **knowledge_retrieval**: 检索维修手册、技术文档、历史案例等文本知识\n"
-            "- **graph_query_diagnosis_path**: 查询知识图谱中的结构化因果链路。keyword 用设备名称，fault_name 用故障现象关键词\n"
-            "- 优先用图谱工具理解设备结构和因果链路，再用知识检索补充背景知识\n"
-            "- 两者配合：图谱给出\"哪些部件会导致哪些故障\"的宏观链路，知识检索给出具体的技术细节\n\n"
+            "- 优先用 graph_search_devices 确定设备，再用 graph_query_diagnosis_path 查因果链路，最后用 knowledge_retrieval 补充细节\n\n"
             "## 工作方式（ReAct 循环）\n"
-            "- 收到故障描述后，先用 graph_query_diagnosis_path 查询可能的结构化因果链路\n"
+            "- 不确定设备全名时，先用 graph_search_devices 搜索\n"
+            "- 收到故障描述后，用 graph_query_diagnosis_path 查询可能的结构化因果链路\n"
             "- 再用 knowledge_retrieval 检索相关维修技术细节\n"
             "- 检索结果不够时，尝试换关键词或从不同角度检索\n"
             "- 如果用户描述不够具体（如只说'坏了'），追问关键细节\n"
@@ -80,8 +82,9 @@ class DiagnosisAgent(BaseAgent):
         tools = []
         from tools.knowledge_retrieval_tool import get_knowledge_retrieval_tool
         tools.append(get_knowledge_retrieval_tool())
-        from tools.graph_query_tool import get_graph_query_tool
+        from tools.graph_query_tool import get_graph_query_tool, get_graph_search_device_tool
         tools.append(get_graph_query_tool())
+        tools.append(get_graph_search_device_tool())
         # TODO: YoloDetectTool 实现后取消下行注释
         # from tools.yolo_tool import get_yolo_detect_tool
         # tools.append(get_yolo_detect_tool())
