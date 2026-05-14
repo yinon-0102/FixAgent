@@ -21,7 +21,9 @@
       "Bash(rm *)",
       "Read(//usr/local/share/claude-code/**)",
       "Read(//c/Program Files/Claude/**)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(pip install *)",
+      "Bash(pip show *)"
     ]
   }
 }
