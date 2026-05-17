@@ -137,7 +137,7 @@ async def transcribe_stream(request: Request, file: UploadFile = File(...)):
             try:
                 async for segment in service.transcribe_stream(tmp_path):
                     yield f"data: {json.dumps(segment, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'event': 'done'})}\n\n"
+                yield f"data: {json.dumps({'event': 'done'}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 logger.exception("[asr] stream error")
                 yield f"data: {json.dumps({'event': 'error', 'data': {'message': str(e)}}, ensure_ascii=False)}\n\n"

@@ -34,16 +34,52 @@ MEMORY_SYSTEM_PROMPT = """你是工作记忆整理助手。从对话记录中提
 
 ## 分类标准
 
-### 事实（客观、已确认、不会改变）
-属于事实：设备型号/参数/配置、已完成的诊断过程和结果、已验证的技术结论
-不是事实（归为偏好）：主观评价、工作习惯、未完成的任务
+### 事实（客观、已确认、可独立理解的信息）
 
-### 偏好（主观、可改变）
-属于偏好：交互风格要求、格式/视觉偏好、工作习惯/经验、关注领域
+**属于事实：** 设备型号/参数/配置、已完成的诊断过程和结果、已验证的技术结论、用户项目/系统的客观信息
+**不属于事实：** 主观评价、工作习惯、未完成的任务
 
-### 未完成事项（悬而未决）
+**事实提取规则（非常重要）：**
+1. 自包含：每条事实必须脱离对话上下文也能完整理解
+   ✗ "他说用那个框架"
+   ✓ "用户的项目使用 Spring Boot 3.2 框架"
+2. 原子化：每条事实只描述一件事
+   ✗ "用户在做维修系统，用Java和MySQL"
+   ✓ "用户正在开发一个设备维修管理系统"
+   ✓ "用户的后端技术栈是 Java"
+   ✓ "用户使用 MySQL 作为数据库"
+3. 时效标注：如果事实可能随时间改变，加上时间标记
+   ✓ "用户当前正在调试登录模块的bug（2026-05）"
+
+### 偏好（用户主动表达的主观倾向，需要严格区分）
+
+**【是偏好 —— 必须满足以下任一条件才能记录】**
+1. 用户的明确指令："以后回答用中文"、"不要给我写注释"、"回复简洁一点"
+2. 用户纠正AI行为后的隐含要求：AI用英文回复后用户说"说中文" → 偏好中文
+3. 用户主动表达的工作习惯："我习惯先写测试再写代码"
+4. 用户主动表达的好恶："我不喜欢用Lombok"、"我更喜欢函数式写法"
+
+**【不是偏好 —— 绝对不要记录为偏好】**
+- 用户正在讨论/使用的技术 ≠ 偏好该技术
+  "帮我看看这个Java代码怎么改" → 不是偏好，只是当前任务涉及Java
+  "用Python写个脚本" → 不是偏好，只是一次性任务需求
+- 用户提到但未表达态度的事物
+  "React的虚拟DOM是什么原理" → 不是偏好，只是在提问
+- 对话的主题/领域
+  一整段关于数据库优化的讨论 → 不代表偏好数据库，只是当前话题
+
+**【sourceType 标注】每条偏好必须标注来源类型：**
+- "explicit"：用户直接说出来的指令或态度（如"不要写注释"、"我喜欢详细解释"）
+- "inferred"：从用户反复出现的行为模式推断的（如用户多次追问细节→可能偏好详细回复）
+  注意：单次行为不足以推断偏好，需要有多次一致的模式
+
+**【preferenceCategory 判断规则】**
+- 0（用户级）：涉及个人习惯、跨话题通用的偏好，如回复语言、风格习惯
+- 1（会话级）：仅针对本次具体任务的临时偏好，如"这次用表格形式展示"
+
+### 未完成事项（悬而未决的待办）
 属于未完成：问了但没得到答案的问题、进行中的任务、用户提出的待办
-注意：一旦事项在新对话中得到解决，应转为事实，不再作为未完成事项
+注意：一旦事项在新对话中得到解决，应转为事实，并将该事项的 id 放入 resolved_item_ids
 
 ## 冲突判断规则（仅针对事实）
 根据工具返回的相似事实判断：
@@ -54,32 +90,35 @@ MEMORY_SYSTEM_PROMPT = """你是工作记忆整理助手。从对话记录中提
 
 偏好和未完成事项不调用工具，按以下规则处理：
 - 同类别、同级别偏好有矛盾 → 以最新表述为准
-- 未完成事项已解决 → 移入 resolved_items
-- 已有偏好和未完成事项可能附带 preferenceCategory 和 status 字段：
+- 未完成事项已解决 → 将其 id 放入 resolved_item_ids
+- 已有偏好和未完成事项附带的字段说明：
   - preferenceCategory: 0=用户级（所有对话公用）, 1=会话级（仅本次会话有效）
   - status: active=进行中, superseded=已放弃。已放弃的事项无需处理
+  - id: 数据库主键，用于精确标记已解决的事项
+
+## 摘要要求
+brief_summary 是导航索引，不是信息源。100字以内，只需概括"这段对话聊了什么话题"。
+具体细节已经被提取为事实/偏好/待办，摘要中不需要重复这些细节。
+如果收到了"之前的对话背景"，请在此基础上生成渐进式摘要（即更新旧摘要，而非从零开始）。
 
 ## 输出格式
 严格按以下 JSON 输出，不要输出其他内容：
 ```json
 {
   "new_facts": [
-    {"content": "事实描述", "keywords": "检索用关键词", "source_seq_range": "3-5"}
+    {"content": "自包含的事实描述", "keywords": "检索用关键词", "source_seq_range": "3-5"}
   ],
   "superseded_ids": ["要标记为无效的旧事实ID"],
   "updated_preferences": [
-    {"content": "偏好描述", "category": "交互风格|格式要求|工作习惯|关注领域|其他", "preferenceCategory": 0}
+    {"content": "偏好描述", "category": "交互风格|格式要求|工作习惯|关注领域|其他", "preferenceCategory": 0, "sourceType": "explicit"}
   ],
   "updated_unresolved": [
     {"content": "待解决描述", "type": "未答复问题|进行中任务|用户待办", "status": "active"}
   ],
-  "resolved_items": ["已解决的事项描述"],
-  "brief_summary": "200字以内的整体摘要"
+  "resolved_item_ids": [12, 34],
+  "brief_summary": "100字以内的话题概括"
 }
 ```
-
-- preferenceCategory: 0=用户级, 1=会话级。新发现的偏好根据内容判断：涉及个人习惯的为用户级，仅针对本次任务的为会话级
-- status: active=进行中, superseded=已放弃。新发现的未完成事项默认为 active
 """
 
 
@@ -116,13 +155,31 @@ class MemoryAgent(BaseAgent):
         return "\n".join(lines)
 
     def _build_messages(self, input_data: AgentInput) -> list:
-        """构建消息列表，包含已有记忆上下文和待整理的新对话"""
+        """
+        构建消息列表，包含已有记忆上下文和待整理的新对话。
+
+        组装顺序：
+        1. 之前的对话背景（上一轮摘要，用于生成渐进式摘要）
+        2. 已有偏好表格（让LLM知道哪些偏好已经存在，避免重复提取）
+        3. 已有未完成事项表格（让LLM判断哪些已经在新对话中解决了）
+        4. 新对话记录（本次需要整理的原始对话）
+        """
         ctx = input_data.context or {}
         conversations = ctx.get("conversations", [])
         old_preferences = ctx.get("old_preferences", [])
         old_unresolved = ctx.get("old_unresolved", [])
+        # 从Java端传来的上一轮整合产出的摘要，用于生成渐进式摘要
+        previous_summary = ctx.get("previous_summary")
 
         parts = []
+
+        # 如果有上一轮摘要，放在最前面作为对话背景
+        # 这样LLM生成新摘要时会在旧摘要基础上更新，而非从零开始
+        if previous_summary:
+            parts.append("## 之前的对话背景（上一轮整合产出的摘要）\n")
+            parts.append(previous_summary)
+            parts.append("")
+            parts.append("请在此基础上生成新的渐进式摘要，更新而非替换。\n")
 
         if old_preferences:
             parts.append("## 已有偏好（需与对话中的新偏好合并）\n")
@@ -134,12 +191,15 @@ class MemoryAgent(BaseAgent):
             parts.append("")
 
         if old_unresolved:
-            parts.append("## 已有未完成事项（需根据新对话判断是否已解决）\n")
-            parts.append("| 事项内容 | 类型 | 状态 |")
-            parts.append("|----------|------|------|")
+            # 带上id列，让LLM能通过id精确标记哪些事项已解决
+            # 避免用content文本匹配导致的不精确问题
+            parts.append("## 已有未完成事项（需根据新对话判断是否已解决，用id标记）\n")
+            parts.append("| id | 事项内容 | 类型 | 状态 |")
+            parts.append("|----|----------|------|------|")
             for u in old_unresolved:
                 status_label = "进行中" if u.get('status') == 'active' else "已放弃"
-                parts.append(f"| {u.get('content', '')} | {u.get('type', '待办')} | {status_label} |")
+                item_id = u.get('id', '?')
+                parts.append(f"| {item_id} | {u.get('content', '')} | {u.get('type', '待办')} | {status_label} |")
             parts.append("")
 
         parts.append(self._format_conversations(conversations))
@@ -152,12 +212,28 @@ class MemoryAgent(BaseAgent):
         ]
 
     def _extract_json(self, text: str) -> MemorySummary:
-        """从 LLM 返回内容中提取 JSON（兼容 markdown 代码块包裹），Pydantic 校验"""
+        """
+        从 LLM 返回内容中提取 JSON（兼容 markdown 代码块包裹），Pydantic 校验
+
+        防御措施：
+        1. 去除 markdown 代码块包裹
+        2. json.loads 后校验是否为 dict（JSON 规范允许纯数字/字符串，但我们只要对象）
+        3. 如果 LLM 返回了嵌套结构（如把结果包在某个 key 下），尝试自动提取
+        """
         cleaned = text.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
             cleaned = re.sub(r"\s*```$", "", cleaned)
         data = json.loads(cleaned)
+
+        # 防御：json.loads 对纯数字、字符串、数组都能成功解析，
+        # 但 MemorySummary(**data) 需要 dict，这里显式检查
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"LLM返回的JSON类型为 {type(data).__name__}，期望 dict 对象。"
+                f"原始内容前100字符: {text[:100]}"
+            )
+
         return MemorySummary(**data)
 
     async def _store_facts_to_vector(self, facts: list[dict], session_id: str):
@@ -205,13 +281,31 @@ class MemoryAgent(BaseAgent):
                 }
             )
 
+    async def _call_llm_with_tools(self, messages, tools, tool_handlers, response_format):
+        """
+        封装 LLM 调用，供 run() 使用，方便重试时复用
+
+        Returns:
+            str: LLM 返回的文本内容
+        """
+        response = await self.llm_service.chat_with_tools(
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            response_format=response_format
+        )
+        return response.get("content") or ""
+
     async def run(self, input_data: AgentInput) -> AgentOutput:
         """
-        执行记忆整理（function calling 模式）
+        执行记忆整理（function calling 模式），带自动重试
 
         流程：构建消息 → 注册工具 → chat_with_tools → 解析 JSON
+        如果 LLM 返回垃圾数据（非 JSON 对象），自动重试1次。
+        Qwen 模型偶尔会返回纯数字或乱码，重试通常能恢复。
         """
         start_time = time.time()
+        max_retries = 1  # 最多重试1次（共2次调用）
 
         messages = self._build_messages(input_data)
 
@@ -226,46 +320,81 @@ class MemoryAgent(BaseAgent):
 
         tool_handlers = {"search_similar_facts": fact_handler}
 
-        try:
-            response = await self.llm_service.chat_with_tools(
-                messages=messages,
-                tools=tools,
-                tool_handlers=tool_handlers,
-                response_format={"type": "json_object"}
-            )
-            content = response.get("content") or ""
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
+        # ========== LLM 调用 + 重试 ==========
+        content = ""
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                content = await self._call_llm_with_tools(
+                    messages, tools, tool_handlers,
+                    response_format={"type": "json_object"}
+                )
+            except Exception as e:
+                # LLM 调用本身失败（网络/超时等）
+                last_error = e
+                logger.warning(f"[memory] LLM调用失败 attempt={attempt+1}: {e}")
+                if attempt < max_retries:
+                    continue
+                latency_ms = int((time.time() - start_time) * 1000)
+                return AgentOutput(
+                    agent_name=self.name,
+                    message="记忆整理失败，请稍后重试",
+                    intention=None,
+                    tools_used=[],
+                    metadata={
+                        "status": "error",
+                        "error_type": type(e).__name__,
+                        "error_detail": str(e),
+                        "latency_ms": latency_ms
+                    },
+                    latency_ms=latency_ms
+                )
+
+            # 尝试解析 JSON
+            try:
+                summary = self._extract_json(content)
+                last_error = None
+                break  # 解析成功，跳出重试循环
+            except (json.JSONDecodeError, ValueError, ValidationError, AttributeError, TypeError) as e:
+                last_error = e
+                logger.warning(
+                    f"[memory] JSON解析失败 attempt={attempt+1}/{max_retries+1}: {e}, "
+                    f"raw content: {content[:100]}"
+                )
+                if attempt < max_retries:
+                    # 重试前重新构建 messages（避免上一轮 tool_call 残留）
+                    messages = self._build_messages(input_data)
+                    continue
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # 所有重试用完仍失败
+        if last_error is not None:
             return AgentOutput(
                 agent_name=self.name,
-                message="记忆整理失败，请稍后重试",
+                message="记忆整理失败：LLM返回格式异常，已重试仍失败",
                 intention=None,
                 tools_used=[],
                 metadata={
                     "status": "error",
-                    "error_type": type(e).__name__,
-                    "error_detail": str(e),
-                    "latency_ms": latency_ms
+                    "error_type": "JsonParseError",
+                    "error_detail": f"LLM返回内容无法解析为记忆摘要: {str(last_error)[:200]}",
+                    "raw_content": content[:200] if content else "",
+                    "latency_ms": latency_ms,
+                    "attempts": max_retries + 1
                 },
                 latency_ms=latency_ms
             )
 
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        try:
-            summary = self._extract_json(content)
-            # 将提取的事实写入 Redis 向量库（失败不影响主流程）
-            if summary.new_facts:
-                try:
-                    await self._store_facts_to_vector(
-                        [f.model_dump() for f in summary.new_facts],
-                        input_data.session_id
-                    )
-                except Exception:
-                    logger.exception("Failed to store facts to Redis vector DB")
-        except (json.JSONDecodeError, ValueError, ValidationError, AttributeError, TypeError) as e:
-            logger.warning(f"JSON parse failed, using fallback: {e}, raw content: {content[:100]}")
-            summary = MemorySummary(brief_summary=content[:200] if content else "")
+        # ========== 解析成功，存入向量库 ==========
+        if summary.new_facts:
+            try:
+                await self._store_facts_to_vector(
+                    [f.model_dump() for f in summary.new_facts],
+                    input_data.session_id
+                )
+            except Exception:
+                logger.exception("Failed to store facts to Redis vector DB")
 
         return AgentOutput(
             agent_name=self.name,

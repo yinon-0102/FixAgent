@@ -768,7 +768,11 @@ class MemoryUnresolvedVO(BaseModel):
 
     【功能关联】记忆整理
     【对应 Java】ai.weixiu.pojo.vo.MemoryUnresolvedVO
+
+    新增 id 字段：数据库主键，用于让LLM通过ID精确标记哪些事项已解决，
+    避免之前用content文本匹配导致的不精确问题。
     """
+    id: Optional[int] = Field(default=None, description="数据库主键ID，用于精确标记已解决事项")
     content: str = Field(..., description="未完成任务摘要描述")
     type: str = Field(..., description="类型: 未答复回答|进行中任务|用户代办")
     status: str = Field(..., description="状态: active=进行中, superseded=已放弃")
@@ -783,14 +787,18 @@ class MemoryConsolidateRequest(BaseModel):
 
     【使用顺序】
     1. Java 端检测到某会话对话数 >= 阈值
-    2. 从数据库取出该会话的全部对话
-    3. 组装 MemoryIntegrationParametersVO
-    4. 调用 Python AI 服务生成摘要
-    5. Java 端存储摘要、清空原始对话
+    2. 从数据库取出该会话的全部对话 + 上一轮摘要
+    3. 组装 MemoryIntegrationParametersVO（含 previousSummary）
+    4. 调用 Python AI 服务生成渐进式摘要
+    5. Java 端存储摘要和提取的记忆
 
     【Java 对应类】ai.weixiu.pojo.vo.MemoryIntegrationParametersVO
+
+    新增 previousSummary 字段：上一轮整合产出的摘要，
+    让 Python 端能在旧摘要基础上生成渐进式摘要，避免信息丢失。
     """
     session_id: str = Field(..., validation_alias="sessionId", description="会话ID")
     memoryMessages: List[MemoryMessage] = Field(..., min_length=1, description="待整理的对话列表")
     memoryPreferenceVOList: List[MemoryPreferenceVO] = Field(default_factory=list, description="已有的偏好列表（用于冲突合并）")
     memoryUnresolvedVOList: List[MemoryUnresolvedVO] = Field(default_factory=list, description="已有的未完成事项列表（用于判断是否解决）")
+    previousSummary: Optional[str] = Field(default=None, description="上一轮整合产出的摘要，用于生成渐进式摘要")

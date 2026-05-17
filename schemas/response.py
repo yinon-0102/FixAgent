@@ -730,10 +730,17 @@ class FactSummary(BaseModel):
 
 
 class PreferenceSummary(BaseModel):
-    """偏好摘要子模型"""
+    """
+    偏好摘要子模型
+
+    新增 sourceType 字段：区分偏好来源的可靠度
+    - explicit: 用户直接说出来的指令，可信度高，Java端直接存为确认偏好
+    - inferred: 从行为推断的，Java端存为候选偏好，需多次出现才升级
+    """
     content: str = Field(description="偏好描述")
     category: str = Field(default="其他", description="分类: 交互风格|格式要求|工作习惯|关注领域|其他")
     preferenceCategory: int = Field(default=1, description="偏好类型: 0=用户级(所有对话公用), 1=会话级(单次会话公用)")
+    sourceType: str = Field(default="inferred", serialization_alias="sourceType", description="explicit=用户明说, inferred=推断")
 
 
 class UnresolvedSummary(BaseModel):
@@ -755,15 +762,16 @@ class MemorySummary(BaseModel):
     - superseded_ids: 本次整理覆盖掉的旧事实ID
     - updated_preferences: 合并后的用户偏好
     - updated_unresolved: 仍悬而未决的事项
-    - resolved_items: 本次解决的事项（从未完成列表中移除）
+    - resolved_item_ids: 本次解决的事项的数据库ID（用于精确标记）
     - brief_summary: 200字以内的整体摘要
     """
     new_facts: List[FactSummary] = Field(default_factory=list, serialization_alias="newFacts", description="新增事实列表")
     superseded_ids: List[str] = Field(default_factory=list, serialization_alias="supersededIds", description="被覆盖的旧事实ID")
-    updated_preferences: List[PreferenceSummary] = Field(default_factory=list, serialization_alias="updatedPreferences", description="更新后的偏好列表")
+    updated_preferences: List[PreferenceSummary] = Field(default_factory=list, serialization_alias="updatedPreferences", description="更新后的偏好列表（含sourceType）")
     updated_unresolved: List[UnresolvedSummary] = Field(default_factory=list, serialization_alias="updatedUnresolved", description="更新后的未完成事项")
-    resolved_items: List[str] = Field(default_factory=list, serialization_alias="resolvedItems", description="已解决的事项描述")
-    brief_summary: str = Field(default="", serialization_alias="briefSummary", description="200字以内的整体摘要")
+    # 改为用数据库ID精确匹配，替代之前的content文本匹配
+    resolved_item_ids: List[int] = Field(default_factory=list, serialization_alias="resolvedItemIds", description="已解决事项的数据库ID列表")
+    brief_summary: str = Field(default="", serialization_alias="briefSummary", description="100字以内的渐进式摘要")
 
 
 class MemoryConsolidateResponse(BaseResponse):

@@ -96,7 +96,8 @@ class VectorService:
         """
         try:
             key = f"doc:{doc_id}"
-            metadata_json = json.dumps(metadata) if metadata else "{}"
+            # ensure_ascii=False：保留中文原文，避免存入Redis后变成 \uXXXX 乱码
+            metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else "{}"
 
             mapping = {
                 "id": doc_id,

@@ -7,7 +7,7 @@ Agent基类模块
 【与架构文档的对应关系】
 - 位置：agents/base_agent.py
 - 职责：AI核心组件的父类，定义统一执行流程
-- 被继承：RetrievalAgent、DiagnosisAgent、GuidanceAgent、OrchestratorAgent
+- 被继承：FixAgent、ReviewAgent、MemoryAgent
 
 【设计模式】
 - 模板方法模式：run() 定义统一执行流程，子类实现具体逻辑

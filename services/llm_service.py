@@ -261,7 +261,7 @@ class LLMService:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": json.dumps({"error": f"Tool {func_name} not found"})
+                        "content": json.dumps({"error": f"Tool {func_name} not found"}, ensure_ascii=False)
                     })
 
                 step_info["tool_calls"].append(call_record)
