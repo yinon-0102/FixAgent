@@ -13,8 +13,6 @@ Schemas请求模型模块
 1. 已实现 API 端点 → Python 端有对应的 FastAPI 路由（如 ChatRequest, KnowledgeImportRequest）
 2. Java 端专用 → 仅供 Java 后端参考数据结构，Python 端不提供服务端点的
    （如 GraphQueryRequest, CaseCreateRequest, DeviceCreateRequest 等）
-3. 已废弃 → 被其他模型替代（如 KnowledgeUploadRequest 被 KnowledgeImportRequest 替代）
-
 标注在对应类的注释中。新开发时注意区分。
 
 【使用顺序】
@@ -48,7 +46,7 @@ ChatRequest request = ChatRequest.builder()
 """
 
 from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from schemas.models import AgentMode, CaseStatus
 
 
@@ -237,20 +235,6 @@ class KnowledgeSearchRequest(BaseModel):
     tags: Optional[List[str]] = Field(default=None, description="标签过滤")
 
 
-class KnowledgeUploadRequest(BaseModel):
-    """
-    知识上传请求（文档导入）
-
-    【状态】已废弃，由 KnowledgeImportRequest 替代。
-    原有字段与 KnowledgeImportRequest 功能重叠且缺少 file_type/category/tags 支持。
-    请使用 KnowledgeImportRequest 代替。保留此模型仅用于兼容旧调用方。
-    """
-    title: str = Field(..., description="文档标题")
-    file_name: str = Field(..., description="文件名")
-    file_url: str = Field(..., description="文件URL")
-    category: Optional[str] = Field(default=None, description="分类")
-
-
 class KnowledgeImportRequest(BaseModel):
     """
     知识导入请求（文档解析 + 向量化入库）
@@ -264,9 +248,8 @@ class KnowledgeImportRequest(BaseModel):
     3. Python 端解析 PDF → 向量化 → 存入 Redis 向量库
     4. 返回导入统计
 
-    【与 KnowledgeUploadRequest 的区别】
-    - Upload: 仅定义上传参数，未实现
-    - Import: 编排完整的 解析→向量化→入库 管道
+    【处理流程】
+    编排完整的 解析→向量化→入库 管道
     """
     file_url: str = Field(..., description="文档路径或URL")
     file_type: str = Field(default="pdf", description="文件类型，目前仅支持 pdf")
@@ -572,140 +555,6 @@ class GraphPathRequest(BaseModel):
 
 # ==================== 工具调用相关 ====================
 
-class YoloDetectRequest(BaseModel):
-    """
-    YOLO目标检测请求
-
-    【状态】未实现。赛题场景为"开放设备类型"，
-    架构文档已明确不使用 YOLO（原因见 架构.txt 多模态处理流程章节）。
-    保留此模型仅用于参考。
-
-    【功能关联】YOLO目标检测模型、故障部件识别
-    【何时用】检测图片中的设备部件或故障点时
-
-    【使用顺序】
-    1. 用户上传故障图片
-    2. 调用 YOLO 检测接口
-    3. 返回检测到的部件列表和位置
-
-    【字段说明】
-    - image_url: 要检测的图片 URL
-    - conf_threshold: 置信度阈值（0.0~1.0）
-      - 默认 0.5：只返回置信度 >= 50% 的结果
-      - 降低阈值：返回更多结果（可能包含误检）
-      - 提高阈值：结果更少但更准确
-
-    【返回值说明】
-    - List[DetectionResult]: 检测到的目标列表
-    - 每个结果包含: class_name（类别）、confidence（置信度）、bbox（位置）
-
-    【Java 对应类】
-    ```java
-    public class YoloDetectRequest {
-        String imageUrl;
-        double confThreshold;  // 默认0.5
-    }
-    ```
-    """
-    image_url: str = Field(..., description="图片URL")
-    conf_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="置信度阈值")
-
-
-class SamSegmentRequest(BaseModel):
-    """
-    SAM图像分割请求
-
-    【状态】未实现。架构文档已明确不使用 SAM 图像分割（原因见 架构.txt）。
-    保留此模型仅用于参考。
-
-    【功能关联】SAM(Segment Anything Model)、精细化故障区域提取
-    【何时用】需要精确分割图片中特定区域时
-
-    【使用顺序】
-    1. YOLO 检测出大致区域
-    2. SAM 进行精细分割
-    3. 获取精确的故障区域 mask
-
-    【字段说明】
-    - image_url: 要分割的图片 URL
-    - bbox: 边界框提示 [x1, y1, x2, y2]（可选）
-      - 提供后只分割框内区域
-      - 不提供则分割全图
-    - point: 点击点提示 [x, y]（可选）
-      - 提供后从该点向外分割
-
-    【bbox 和 point 关系】
-    - 只提供 bbox: 分割框内所有物体
-    - 只提供 point: 从点所在物体向外分割
-    - 同时提供: 结合两者指导分割
-
-    【Java 对应类】
-    ```java
-    public class SamSegmentRequest {
-        String imageUrl;
-        List<Float> bbox;  // 可选 [x1,y1,x2,y2]
-        List<Float> point; // 可选 [x,y]
-    }
-    ```
-    """
-    image_url: str = Field(..., description="图片URL")
-    bbox: Optional[List[float]] = Field(default=None, description="边界框[x1,y1,x2,y2]")
-    point: Optional[List[float]] = Field(default=None, description="点击点[x,y]")
-
-
-class ClipEmbedRequest(BaseModel):
-    """
-    CLIP向量化请求
-
-    【状态】未实现。Python 端使用百炼 text-embedding-v4 代替 CLIP。
-    保留此模型仅用于参考。
-
-    【功能关联】CLIP多模态模型、文本/图片向量化
-    【何时用】生成文本或图片的向量表示时
-
-    【使用场景】
-    - 文本向量化：用于语义检索
-    - 图片向量化：用于以图搜图
-    - 多模态检索：文本+图片联合查询
-
-    【字段说明】
-    - text: 文本内容（可选，与 image_url 二选一）
-    - image_url: 图片 URL（可选，与 text 二选一）
-    - mode: 向量化模式
-      - "text": 只向量化文本
-      - "image": 只向量化图片
-      - "multimodal": 文本图片都向量化
-
-    【校验规则】
-    - text 和 image_url 至少提供一个
-    - 否则抛出验证错误
-
-    【返回值说明】
-    - embedding: 向量列表
-    - dimension: 向量维度（CLIP 通常 512 或 768）
-    - model: 使用的模型名称
-
-    【Java 对应类】
-    ```java
-    public class ClipEmbedRequest {
-        String text;           // 可选
-        String imageUrl;       // 可选
-        String mode;           // "text" / "image" / "multimodal"
-    }
-    ```
-    """
-    text: Optional[str] = Field(default=None, description="文本")
-    image_url: Optional[str] = Field(default=None, description="图片URL")
-    mode: str = Field(default="text", description="模式: text/image/multimodal")
-
-    @model_validator(mode='after')
-    def at_least_one_required(self):
-        """校验 text 或 image_url 至少提供一个"""
-        if not self.text and not self.image_url:
-            raise ValueError("text或image_url至少需要提供一个")
-        return self
-
-
 class DocumentParseRequest(BaseModel):
     """
     文档解析请求
@@ -814,3 +663,4 @@ class MemoryConsolidateRequest(BaseModel):
     memoryPreferenceVOList: List[MemoryPreferenceVO] = Field(default_factory=list, description="已有的偏好列表（用于冲突合并）")
     memoryUnresolvedVOList: List[MemoryUnresolvedVO] = Field(default_factory=list, description="已有的未完成事项列表（用于判断是否解决）")
     previousSummary: Optional[str] = Field(default=None, description="上一轮整合产出的摘要，用于生成渐进式摘要")
+

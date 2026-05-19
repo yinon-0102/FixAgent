@@ -19,8 +19,6 @@ Schemas基础模型模块
 | KnowledgeStatus | 知识状态 | 知识库的发布/归档管理 |
 | CaseStatus | 案例状态 | 案例提交→审核→通过/拒绝流程 |
 | AgentMode | Agent模式 | 调度时选择 retrieval/diagnosis/guidance |
-| IntentionType | 用户意图 | 旧架构Orchestrator识别用户想干什么（已废弃） |
-| ImageProcessStatus | 图片状态 | 图片上传后的处理状态跟踪 |
 | TaskStatus | 异步任务 | 长任务的状态查询 |
 """
 
@@ -119,74 +117,6 @@ class AgentMode(str, Enum):
     DIAGNOSIS = "diagnosis"   # 诊断模式（故障分析）
     GUIDANCE = "guidance"    # 指引模式（生成步骤）
     FULL = "full"             # 完整流程（检索+诊断+指引）
-
-
-class IntentionType(str, Enum):
-    """
-    用户意图类型枚举
-
-    注意：此枚举属于旧架构（Orchestrator 意图路由），
-    当前已由 FixAgent 统一 ReAct 循环替代，不再需要意图识别。
-    保留仅用于兼容，新代码不应依赖此枚举。
-
-    旧架构中的意图与 AgentMode 映射关系：
-    - QUERY_KNOWLEDGE → RETRIEVAL
-    - TROUBLESHOOT → DIAGNOSIS
-    - SEEK_GUIDANCE → GUIDANCE
-    - SUBMIT_CASE → RETRIEVAL
-    - GENERAL_CHAT → CHAT
-    """
-    QUERY_KNOWLEDGE = "query_knowledge"      # 查询知识
-    TROUBLESHOOT = "troubleshoot"            # 故障排查
-    SEEK_GUIDANCE = "seek_guidance"         # 寻求指导
-    SUBMIT_CASE = "submit_case"              # 提交案例
-    GENERAL_CHAT = "general_chat"           # 一般对话
-
-
-class IntentionResult(BaseModel):
-    """
-    意图识别结果模型
-
-    注意：此模型属于旧架构（Orchestrator 意图路由），
-    当前已由 FixAgent 统一 ReAct 循环替代，不再使用。保留仅用于兼容。
-
-    【字段说明】
-    - intention: 识别的意图类型
-    - confidence: 置信度（0.0~1.0）
-    - reasoning: 识别理由/推理过程
-
-    【置信度参考】
-    - >= 0.9: 高度确信
-    - 0.7~0.9: 中度确信
-    - 0.5~0.7: 低度确信（兜底方案）
-    - < 0.5: 不确信
-    """
-    intention: IntentionType = Field(description="意图类型")
-    confidence: float = Field(description="置信度", ge=0.0, le=1.0)
-    reasoning: str = Field(description="识别理由")
-
-
-class ImageProcessStatus(str, Enum):
-    """
-    图片处理状态枚举
-
-    【关联】图片上传与处理流程（YOLO检测、SAM分割）
-    【何时用】异步图片处理任务的状态跟踪
-
-    【使用顺序】
-    1. 图片上传 → PENDING
-    2. 开始处理（如YOLO检测）→ PROCESSING
-    3. 处理完成 → COMPLETED
-    4. 处理失败 → FAILED（记录错误原因）
-
-    【使用场景】
-    - YoloDetectRequest/SamSegmentRequest 的异步版本
-    - 批量图片处理任务的状态查询
-    """
-    PENDING = "pending"      # 待处理
-    PROCESSING = "processing"  # 处理中
-    COMPLETED = "completed"    # 已完成
-    FAILED = "failed"          # 失败
 
 
 class TaskStatus(str, Enum):
@@ -366,79 +296,6 @@ class PaginationMeta(BaseModel):
 
 # ==================== 通用数据结构 ====================
 
-class DetectionBox(BaseModel):
-    """
-    检测框模型
-
-    【功能关联】YOLO目标检测结果
-    【何时用】YoloDetectResponse 中描述检测到的目标位置
-
-    【字段说明】
-    - x1, y1: 左上角坐标（像素值）
-    - x2, y2: 右下角坐标（像素值）
-
-    【使用顺序】
-    1. YOLO 模型检测图片
-    2. 返回检测框坐标 → DetectionBox
-    3. 前端在图片上绘制矩形框
-
-    【坐标系统】
-    - 原点为图片左上角
-    - x 向右递增，y 向下递增
-    - 值为归一化坐标（0.0~1.0）或像素值（取决于模型配置）
-
-    【方法说明】
-    - to_xyxy(): 转换为 [x1, y1, x2, y2] 列表格式，方便绘图
-    """
-    x1: float = Field(description="左上角X坐标")
-    y1: float = Field(description="左上角Y坐标")
-    x2: float = Field(description="右下角X坐标")
-    y2: float = Field(description="右下角Y坐标")
-
-    def to_xyxy(self) -> List[float]:
-        """
-        转换为 [x1, y1, x2, y2] 列表格式
-
-        【用途】前端绘图库（如 OpenCV、Canvas）通常需要这种格式
-        ```python
-        bbox = DetectionBox(x1=0.1, y1=0.2, x2=0.5, y2=0.6)
-        coords = bbox.to_xyxy()  # [0.1, 0.2, 0.5, 0.6]
-        ```
-        """
-        return [self.x1, self.y1, self.x2, self.y2]
-
-
-class DetectionResult(BaseModel):
-    """
-    检测结果模型
-
-    【功能关联】YOLO目标检测响应
-    【何时用】YoloDetectResponse 中描述单个检测目标
-
-    【字段说明】
-    - class_name: 目标类别（如 "bearing"、"motor"、"worn"）
-    - confidence: 置信度（0.0~1.0），高于阈值才保留
-    - bbox: 检测框位置
-
-    【使用顺序】
-    1. 调用 YOLO 检测接口
-    2. 遍历 DetectionResult 列表
-    3. 按 confidence 排序或过滤
-
-    【Java 对应】
-    ```java
-    public class DetectionResult {
-        String className;
-        double confidence;
-        DetectionBox bbox;
-    }
-    ```
-    """
-    class_name: str = Field(description="类别名称")
-    confidence: float = Field(description="置信度", ge=0.0, le=1.0)
-    bbox: DetectionBox = Field(description="检测框")
-
-
 class VectorSearchResult(BaseModel):
     """
     向量搜索结果模型
@@ -578,3 +435,5 @@ class GraphQueryResult(BaseModel):
     """
     nodes: List[GraphNode] = Field(default_factory=list)
     relations: List[GraphRelation] = Field(default_factory=list)
+
+

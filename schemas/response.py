@@ -27,7 +27,7 @@ from typing import Optional, List, Any
 from pydantic import BaseModel, Field, ConfigDict
 from schemas.models import (
     BaseResponse, PaginationMeta,
-    DetectionResult, VectorSearchResult, GraphNode, GraphRelation
+    VectorSearchResult, GraphNode, GraphRelation
 )
 
 
@@ -552,89 +552,6 @@ class GraphStatsResponse(BaseResponse):
 
 # ==================== 工具调用相关 ====================
 
-class YoloDetectResponse(BaseResponse):
-    """
-    YOLO检测响应
-
-    【功能关联】YOLO目标检测、故障部件识别
-    【何时用】YOLO检测完成后
-
-    【字段说明】
-    - image_url: 被检测的图片 URL
-    - detections: 检测结果列表
-    - process_time_ms: 处理耗时
-
-    【Java 对应类】
-    ```java
-    public class YoloDetectResponse extends BaseResponse {
-        String imageUrl;
-        List<DetectionResult> detections;
-        int processTimeMs;
-    }
-    ```
-    """
-    image_url: str
-    detections: List[DetectionResult]
-    process_time_ms: int
-
-
-class SamSegmentResponse(BaseResponse):
-    """
-    SAM分割响应
-
-    【功能关联】SAM图像分割、精细化故障区域
-    【何时用】SAM分割完成后
-
-    【字段说明】
-    - image_url: 被分割的图片 URL
-    - masks: 分割掩码列表（每个 mask 是 dict）
-    - labels: 每个 mask 对应的标签
-    - process_time_ms: 处理耗时
-
-    【masks 结构示例】
-    ```json
-    [
-        {"mask": [[0,1,1], [1,1,0]], "bbox": [10, 20, 100, 150]},
-        {"mask": [[1,0,0], [0,0,1]], "bbox": [50, 60, 120, 180]}
-    ]
-    ```
-    """
-    image_url: str
-    masks: List[dict]
-    labels: List[str]
-    process_time_ms: int
-
-
-class ClipEmbedResponse(BaseResponse):
-    """
-    CLIP向量化响应
-
-    【功能关联】CLIP多模态模型、向量化
-    【何时用】生成文本或图片向量后
-
-    【字段说明】
-    - embedding: 生成的向量（浮点数列表）
-    - dimension: 向量维度（如 512、768）
-    - model: 使用的模型名称
-
-    【使用场景】
-    - 文本向量化 → 存入 Redis 向量库
-    - 图片向量化 → 用于相似图片检索
-
-    【Java 对应类】
-    ```java
-    public class ClipEmbedResponse extends BaseResponse {
-        List<Float> embedding;
-        int dimension;
-        String model;
-    }
-    ```
-    """
-    embedding: List[float]
-    dimension: int
-    model: str
-
-
 class DocumentParseResponse(BaseResponse):
     """
     文档解析响应
@@ -807,3 +724,4 @@ class MemoryConsolidateResponse(BaseResponse):
     summary: MemorySummary = Field(..., description="整理后的记忆摘要")
     original_count: int = Field(..., serialization_alias="originalCount", description="原始对话条数")
     consolidated_at: str = Field(..., serialization_alias="consolidatedAt", description="整理时间")
+
