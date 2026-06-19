@@ -42,9 +42,9 @@ class KnowledgeService:
 
     # embed_batch 单批最大条数（百炼 API 限制）
     _BATCH_SIZE = 20
-    _TEXT_BATCH_CONCURRENCY = 6
-    _TABLE_CONCURRENCY = 6
-    _IMAGE_CONCURRENCY = 3
+    _TEXT_BATCH_CONCURRENCY = 12
+    _TABLE_CONCURRENCY = 12
+    _IMAGE_CONCURRENCY = 12
     _IMAGE_BATCH_SIZE = 8
     _IMAGE_SUMMARY_CONCURRENCY = 3
     # 入向量文本差异化策略：长内容类(step/大纲/通用)补 contextual 上下文以提升召回，
@@ -346,33 +346,43 @@ class KnowledgeService:
         # 方案乙：给 step 块额外嵌一份“纯内容”向量（doc_id 用 :srw: 后缀）。
         # 召回侧 step_raw 路命中后，经 _canonical_id 的 source_chunk_id 归并回原块；
         # 原块 id/边界/带前缀向量一律不动，150 条 golden 仍可比。
+        # embed_batch 对未命中缓存的文本逐条串行，整批一次性调用等于并发=1；
+        # 故与文本主段一致，改为分条 _gather_limited 并发，避免成为隐藏瓶颈。
+        step_raw_embedding_started = time.time()
         step_raw_inputs = [
             doc for doc in text_docs
             if (doc.get("metadata") or {}).get("chunk_label") == "step"
             and ((doc.get("metadata") or {}).get("raw_text") or "").strip()
         ]
-        if step_raw_inputs:
-            raw_vectors = await self.text_emb.embed_batch(
-                [doc["metadata"]["raw_text"].strip() for doc in step_raw_inputs]
-            )
-            for doc, vec in zip(step_raw_inputs, raw_vectors):
-                raw_text = doc["metadata"]["raw_text"].strip()
-                srw_meta = dict(doc["metadata"])
-                srw_meta.update({
-                    "chunk_type": "step_raw",
-                    "chunk_label": "step_raw",
-                    "retrieval_route": "step_raw",
-                    "source_chunk_id": doc["doc_id"],
-                    "contextual_text": raw_text,
-                })
-                text_docs.append({
-                    "doc_id": doc["doc_id"].replace(":txt:", ":srw:"),
-                    "text": raw_text,
-                    "vector": vec,
-                    "category": doc.get("category"),
-                    "tags": doc.get("tags"),
-                    "metadata": srw_meta,
-                })
+
+        async def embed_step_raw(doc):
+            raw_text = doc["metadata"]["raw_text"].strip()
+            vec = await self.text_emb.embed(raw_text)
+            return doc, raw_text, vec
+
+        step_raw_results = await self._gather_limited(
+            step_raw_inputs,
+            self._TEXT_BATCH_CONCURRENCY,
+            embed_step_raw,
+        )
+        for doc, raw_text, vec in step_raw_results:
+            srw_meta = dict(doc["metadata"])
+            srw_meta.update({
+                "chunk_type": "step_raw",
+                "chunk_label": "step_raw",
+                "retrieval_route": "step_raw",
+                "source_chunk_id": doc["doc_id"],
+                "contextual_text": raw_text,
+            })
+            text_docs.append({
+                "doc_id": doc["doc_id"].replace(":txt:", ":srw:"),
+                "text": raw_text,
+                "vector": vec,
+                "category": doc.get("category"),
+                "tags": doc.get("tags"),
+                "metadata": srw_meta,
+            })
+        stage_timings_ms["step_raw_embedding_ms"] = int((time.time() - step_raw_embedding_started) * 1000)
 
         text_write_started = time.time()
         written = self.vector_svc.add_vector_batch(text_docs)
@@ -386,7 +396,8 @@ class KnowledgeService:
         text_count = written
         stage_timings_ms["text_write_ms"] = int((time.time() - text_write_started) * 1000)
 
-        # 3b. 表格块：整篇文档全局并发向量化，表格失败只计数不中断整份导入。
+        # 3b. 表格块：整篇文档全局并发向量化（单条任务 + 信号量并发；embed_batch 内部逐条串行，
+        # 故单条粒度并发优于粗批），表格失败只计数不中断整份导入。
         table_embedding_started = time.time()
 
         async def embed_table_job(table_job):
